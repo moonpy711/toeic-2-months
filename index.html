@@ -42,6 +42,10 @@ button,input{font:inherit;color:inherit}
 .eyebrow{font-family:var(--f-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--rule)}
 h1{font-family:var(--f-display);font-weight:400;font-size:34px;line-height:1.1;margin:2px 0 0;text-wrap:balance}
 .period{font-family:var(--f-mono);font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.target{display:flex;align-items:baseline;gap:8px;margin-top:6px;font-size:14px;color:var(--muted)}
+.target b{font-family:var(--f-display);font-weight:400;font-size:26px;color:var(--a);line-height:1}
+.score .tg{color:var(--pc);font-weight:700}
+.modal label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted)}
 .dday{font-family:var(--f-display);font-size:20px;color:var(--warn)}
 .linkbtn{background:none;border:0;padding:0;color:var(--muted);text-decoration:underline;text-underline-offset:3px;cursor:pointer;font-size:13px;font-family:var(--f-body)}
 
@@ -139,6 +143,7 @@ form.add input{flex:1;min-width:0;border:1px solid var(--rule-soft);background:v
     <div>
       <div class="eyebrow">TOEIC · 2인 공부 답안지</div>
       <h1>토익 2달동안 뿌시기</h1>
+      <div class="target" id="myTarget" hidden>나의 목표 <b id="myTargetVal"></b></div>
     </div>
     <div class="period">
       <span id="period">불러오는 중…</span>
@@ -157,7 +162,10 @@ form.add input{flex:1;min-width:0;border:1px solid var(--rule-soft);background:v
 
   <div class="note" id="note" hidden></div>
 
-  <section class="board" id="board" aria-label="달성률"></section>
+  <section style="display:flex;flex-direction:column;gap:10px">
+    <div class="sheet-h"><h2 id="dayTitle">—</h2><span class="msg" id="dayMsg"></span></div>
+    <div class="cols" id="cols"></div>
+  </section>
 
   <section class="cal" id="cal" aria-label="달력">
     <div class="cal-head">
@@ -181,21 +189,19 @@ form.add input{flex:1;min-width:0;border:1px solid var(--rule-soft);background:v
     </div>
   </section>
 
-  <section style="display:flex;flex-direction:column;gap:10px">
-    <div class="sheet-h"><h2 id="dayTitle">—</h2><span class="msg" id="dayMsg"></span></div>
-    <div class="cols" id="cols"></div>
-  </section>
+  <section class="board" id="board" aria-label="달성률"></section>
 </div>
 
 <div class="modal" id="nameModal" hidden>
   <form id="nameForm">
-    <h2>이름을 입력하세요</h2>
-    <p>입력한 이름으로 목표가 저장돼요. 폰·아이패드에서도 같은 이름을 쓰면 같은 기록으로 이어져요.</p>
+    <h2>이름과 목표 점수를 입력하세요</h2>
+    <p>폰·아이패드에서도 같은 이름을 쓰면 같은 기록으로 이어져요.</p>
     <div id="knownWrap" hidden>
       <p style="margin-bottom:6px">이미 등록된 이름</p>
       <div class="known" id="known"></div>
     </div>
-    <input id="nameInput" maxlength="12" placeholder="예: 서진" autocomplete="off" required>
+    <label>이름을 입력하세요<input id="nameInput" maxlength="12" placeholder="예: 서진" autocomplete="off" required></label>
+    <label>목표 점수를 입력하세요<input id="scoreInput" type="number" inputmode="numeric" min="10" max="990" step="5" placeholder="예: 850" required></label>
     <div class="row"><button type="button" class="ghost" id="nameCancel" hidden>취소</button><button class="btn" style="--pc:var(--a)" type="submit">시작하기</button></div>
   </form>
 </div>
@@ -274,6 +280,10 @@ form.add input{flex:1;min-width:0;border:1px solid var(--rule-soft);background:v
     const order = state.me && names.includes(state.me) ? [state.me, ...names.filter(n => n !== state.me)] : names;
     const color = n => colorFor(Math.max(0, names.indexOf(n)));
     const label = n => n + (n === state.me ? " (나)" : "");
+    const tgt = n => state.users.find(u => u.name === n)?.target;
+    const mt = state.me && tgt(state.me);
+    $("myTarget").hidden = !mt;
+    if (mt) $("myTargetVal").textContent = mt + "점";
 
     const s = parse(state.plan.start), e = parse(state.plan.end);
     const days = Math.round((e - s)/864e5) + 1;
@@ -292,7 +302,6 @@ form.add input{flex:1;min-width:0;border:1px solid var(--rule-soft);background:v
 
     const note = $("note");
     if (state.failed) { note.hidden = false; note.textContent = "서버에 연결하지 못했어요. 인터넷 연결을 확인하고 새로고침해 주세요."; }
-    else if (state.loaded && names.length < 2) { note.hidden = false; note.textContent = "아직 혼자예요. 이 페이지 링크를 친구에게 보내면, 친구가 이름을 입력하는 순간 여기 함께 보여요."; }
     else note.hidden = true;
 
     const board = $("board"); board.replaceChildren();
@@ -300,7 +309,9 @@ form.add input{flex:1;min-width:0;border:1px solid var(--rule-soft);background:v
       const st = stats(n);
       const c = el("div","score"); c.style.setProperty("--pc", color(n));
       const bar = el("div","bar"); const fill = el("i"); fill.style.width = st.pct + "%"; bar.append(fill);
-      c.append(el("div","nm",label(n)), el("div","pct", st.pct + "%"), el("div","sub", `완료 ${st.done}/${st.total} · 완수한 날 ${st.fullDays}일 · 연속 ${st.streak}일`), bar);
+      const nm = el("div","nm",label(n));
+      if (tgt(n)) nm.append(" · ", el("span","tg", `목표 ${tgt(n)}점`));
+      c.append(nm, el("div","pct", st.pct + "%"), el("div","sub", `완료 ${st.done}/${st.total} · 완수한 날 ${st.fullDays}일 · 연속 ${st.streak}일`), bar);
       board.append(c);
     });
     if (!order.length) board.append(el("div","empty", state.loaded ? "" : "불러오는 중…"));
@@ -408,14 +419,16 @@ form.add input{flex:1;min-width:0;border:1px solid var(--rule-soft);background:v
   $("mNext").addEventListener("click", () => goMonth(1));
 
   // ---------- name ----------
+  let askedScore = false;
   function fillKnown() {
     const known = $("known"); known.replaceChildren();
     const names = state.users.map(u => u.name);
     $("knownWrap").hidden = !names.length;
-    names.forEach(n => { const b = el("button", null, n); b.type = "button"; b.addEventListener("click", () => { $("nameInput").value = n; }); known.append(b); });
+    names.forEach(n => { const b = el("button", null, n); b.type = "button"; b.addEventListener("click", () => { $("nameInput").value = n; const t = state.users.find(u => u.name === n)?.target; if (t) $("scoreInput").value = t; }); known.append(b); });
   }
   function openName(cancelable) {
     $("nameInput").value = state.me || "";
+    $("scoreInput").value = (state.me && state.users.find(u => u.name === state.me)?.target) || "";
     $("nameCancel").hidden = !cancelable;
     fillKnown();
     $("nameModal").hidden = false;
@@ -426,12 +439,14 @@ form.add input{flex:1;min-width:0;border:1px solid var(--rule-soft);background:v
   $("nameForm").addEventListener("submit", async ev => {
     ev.preventDefault();
     const n = $("nameInput").value.trim().slice(0,12);
-    if (!n) return;
+    const t = Math.round(Number($("scoreInput").value) / 5) * 5;
+    if (!n || !(t >= 10 && t <= 990)) return;
     state.me = n; store.set("toeic-name", n);
+    const existing = state.users.find(u => u.name === n);
+    const doc = existing ? { name: n, target: t } : { name: n, target: t, at: Date.now() };
+    state.users = existing ? state.users.map(u => u.name === n ? { ...u, target: t } : u) : [...state.users, doc];
     $("nameModal").hidden = true; render();
-    if (db && !state.users.some(u => u.name === n)) {
-      try { await db.collection("users").doc(idOf(n)).set({ name: n, at: Date.now() }); } catch { flash("이름을 저장하지 못했어요."); }
-    }
+    if (db) { try { await db.collection("users").doc(idOf(n)).set(doc, { merge: true }); } catch { flash("저장하지 못했어요. 인터넷 연결을 확인해 주세요."); } }
   });
 
   // ---------- settings ----------
@@ -500,6 +515,8 @@ form.add input{flex:1;min-width:0;border:1px solid var(--rule-soft);background:v
     db.collection("users").onSnapshot(snap => {
       state.users = snap.docs.map(d => d.data()).filter(u => u && u.name).sort((a,b)=>(a.at||0)-(b.at||0));
       if (!$("nameModal").hidden) fillKnown();
+      const meDoc = state.users.find(u => u.name === state.me);
+      if (state.me && meDoc && !meDoc.target && !snap.metadata.fromCache && $("nameModal").hidden && !askedScore) { askedScore = true; openName(false); }
       if (state.me && !snap.metadata.fromCache && !state.users.some(u => u.name === state.me))
         db.collection("users").doc(idOf(state.me)).set({ name: state.me, at: Date.now() }).catch(() => {});
       render();
