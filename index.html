@@ -268,9 +268,28 @@ form.add input{flex:1;min-width:0;border:1px solid var(--rule-soft);background:v
   } catch (e) { state.failed = true; }
 
   function people() {
-    const names = state.users.map(u => u.name);
-    for (const g of state.goals) if (g.who && !names.includes(g.who)) names.push(g.who);
-    return names;
+    return state.users.map(u => u.name);
+  }
+  // goals whose account no longer exists (deleted) — removed once both lists are confirmed by the server
+  let cleaning = false;
+  async function cleanOrphans() {
+    if (cleaning || !db || !state.usersFresh || !state.goalsFresh || state.deleting) return;
+    const valid = new Set(state.users.map(u => u.name));
+    const orphans = state.goals.filter(g => !valid.has(g.who));
+    if (!orphans.length) return;
+    cleaning = true;
+    try {
+      for (let i = 0; i < orphans.length; i += 400) {
+        const batch = db.batch();
+        orphans.slice(i, i + 400).forEach(g => batch.delete(db.collection("goals").doc(g.id)));
+        await batch.commit();
+      }
+    } catch {}
+    cleaning = false;
+  }
+  function signOutLocal() {
+    state.me = ""; askedScore = true;
+    try { localStorage.removeItem("toeic-name"); } catch {}
   }
   const colorFor = i => (i % 2 ? "var(--b)" : "var(--a)");
 
@@ -457,8 +476,7 @@ form.add input{flex:1;min-width:0;border:1px solid var(--rule-soft);background:v
   }
   $("nameBtn").addEventListener("click", () => openName(true));
   $("logoutBtn").addEventListener("click", () => {
-    state.me = ""; askedScore = true;
-    try { localStorage.removeItem("toeic-name"); } catch {}
+    signOutLocal();
     render(); openName(false);
   });
   $("deleteBtn").addEventListener("click", () => {
@@ -474,21 +492,29 @@ form.add input{flex:1;min-width:0;border:1px solid var(--rule-soft);background:v
     if (!db || !state.me) return;
     const who = state.me;
     $("delOk").disabled = true; $("delOk").textContent = "삭제 중…";
+    state.deleting = true;
     try {
-      const snap = await db.collection("goals").where("who", "==", who).get();
-      const refs = snap.docs.map(d => d.ref);
-      refs.push(db.collection("users").doc(idOf(who)));
-      for (let i = 0; i < refs.length; i += 400) {
-        const batch = db.batch();
-        refs.slice(i, i + 400).forEach(ref => batch.delete(ref));
-        await batch.commit();
-      }
+      await db.collection("users").doc(idOf(who)).delete();
+      signOutLocal();
       state.users = state.users.filter(u => u.name !== who);
-      state.me = ""; askedScore = true;
-      try { localStorage.removeItem("toeic-name"); } catch {}
+      for (let round = 0; round < 3; round++) {
+        const snap = await db.collection("goals").where("who", "==", who).get({ source: "server" });
+        const ids = new Set(snap.docs.map(d => d.id));
+        state.goals.filter(g => g.who === who).forEach(g => ids.add(g.id));
+        if (!ids.size) break;
+        const list = [...ids];
+        for (let i = 0; i < list.length; i += 400) {
+          const batch = db.batch();
+          list.slice(i, i + 400).forEach(id => batch.delete(db.collection("goals").doc(id)));
+          await batch.commit();
+        }
+        state.goals = state.goals.filter(g => g.who !== who);
+      }
+      state.deleting = false;
       $("delModal").hidden = true;
       render(); openName(false);
     } catch {
+      state.deleting = false;
       $("delOk").disabled = false; $("delOk").textContent = "다시 시도";
       $("delMsg").textContent = "삭제하지 못했어요. 인터넷 연결을 확인하고 다시 시도해 주세요.";
     }
@@ -575,14 +601,18 @@ form.add input{flex:1;min-width:0;border:1px solid var(--rule-soft);background:v
       if (!$("nameModal").hidden) fillKnown();
       const meDoc = state.users.find(u => u.name === state.me);
       if (state.me && meDoc && !meDoc.target && !snap.metadata.fromCache && $("nameModal").hidden && !askedScore) { askedScore = true; openName(false); }
-      if (state.me && !snap.metadata.fromCache && !state.users.some(u => u.name === state.me))
-        db.collection("users").doc(idOf(state.me)).set({ name: state.me, at: Date.now() }).catch(() => {});
-      render();
+      state.usersFresh = !snap.metadata.fromCache && !snap.metadata.hasPendingWrites;
+      if (state.usersFresh && state.me && !state.deleting && !state.users.some(u => u.name === state.me)) {
+        signOutLocal();
+        if ($("nameModal").hidden) openName(false);
+      }
+      render(); cleanOrphans();
     }, fail);
     db.collection("goals").onSnapshot(snap => {
       clearTimeout(timer);
       state.goals = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      state.loaded = true; state.failed = false; render();
+      state.goalsFresh = !snap.metadata.fromCache && !snap.metadata.hasPendingWrites;
+      state.loaded = true; state.failed = false; render(); cleanOrphans();
     }, fail);
   } else render();
 })();
